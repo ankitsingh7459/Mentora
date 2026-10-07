@@ -218,3 +218,32 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Completed backend handoff exclusions
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.coverage
+htmlcov/
+*.pem
+*.key
+
+.test-tmp*/
+
+# Credentials, local tooling and database exports
+*.p12
+*.pfx
+*.jks
+credentials*.json
+service-account*.json
+*.dump
+*.backup
+*.sql.gz
+dumps/
+backups/
+.handoff-repo/
