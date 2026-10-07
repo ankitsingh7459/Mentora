@@ -1,303 +1,131 @@
-# Mentora
+# Mentora backend
 
-### Senior–Junior Career Mentorship and Institutional Knowledge Platform
+S0 and A1 are owned by Ankit. S0's shared foundation is preserved; A1 checkpoints 1-3, 4a and 3b membership administration add verified identity, own-profile read/update, membership requests, current member/role checks, explicit administrator bootstrap and atomic pending-request review. Approved policies and verification evidence are in [docs/s0.md](docs/s0.md); the API/error handoff is in [docs/api.md](docs/api.md). Remaining A1 checkpoints are in [tasks/plan.md](tasks/plan.md).
 
-Mentora is a college-focused platform that helps juniors learn from the experiences of seniors and alumni.
+## Local setup on Windows PowerShell
 
-It preserves useful stories about learning, projects, interviews and mistakes, then makes reviewed experiences searchable. Students can ask questions, inspect the evidence supporting an AI answer and follow practical learning roadmaps.
+Prerequisites: Python 3.12, Docker Desktop running Linux containers, and Git for team version control. Run from the repository root. The completed handoff is on ankit/backend-foundation in the team repository. Clone https://github.com/ankitsingh7459/Mentora.git and check out that branch before setup. The original project overview is preserved in [docs/project-overview.md](docs/project-overview.md).
 
-> **Project status:** Planning stage. Development has not started. The features and technology choices below describe the planned implementation.
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements.lock
+Set-Location backend
+Copy-Item .env.example .env
+docker run --detach --rm --name mentora-s0-local --publish 127.0.0.1:55432:5432 --env POSTGRES_USER=mentora --env POSTGRES_PASSWORD=local-test-only --env POSTGRES_DB=mentora_s0_test postgres:16
+docker exec mentora-s0-local pg_isready -U mentora -d mentora_s0_test
+# Repeat pg_isready until it reports accepting connections.
+..\.venv\Scripts\python.exe -m alembic upgrade head
+..\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
 
-## The Problem
+The example credentials are synthetic and only for the disposable local container. Do not reuse them on a shared database. The `--rm` container has no persistent volume; stopping it deletes its data. Docker is used here only for isolated PostgreSQL; API/worker deployment and CI belong to later tasks.
 
-Useful guidance often stays in personal chats or disappears when seniors graduate.
+In another terminal:
 
-Juniors may struggle to:
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health/live
+Invoke-RestMethod http://127.0.0.1:8000/health/ready
+# After finishing the local demo, remove only the container you created:
+docker stop mentora-s0-local
+```
 
-- Find seniors with relevant experience.
-- Get guidance suited to their college and academic context.
-- Learn from previous students’ mistakes.
-- Check the sources behind AI-generated advice.
-- Decide what to learn next.
-
-Mentora aims to preserve this knowledge and make it useful for future batches.
-
-## Target Users
-
-- **Juniors:** Discover experiences, ask questions and follow roadmaps.
-- **Seniors and alumni:** Contribute experiences and, in a later release, offer mentoring.
-- **Institution moderators:** Review submissions and handle reports.
-- **Platform administrators:** Manage restricted access and operational settings.
+OpenAPI: `http://127.0.0.1:8000/api/v1/openapi.json`; interactive docs: `http://127.0.0.1:8000/api/v1/docs`. Stopping PostgreSQL leaves liveness at 200 and changes readiness to 503. Configuration is checked at app startup, without connecting to PostgreSQL. Missing/invalid settings report only affected variable names. `.env` is loaded from the backend working directory; environment variables override it.
 
-The initial pilot will focus on **one institution, one department and one software-development career track**.
+## Tests
 
-## Planned Features
+From `backend/`:
 
-### Core MVP
+```powershell
+# Fast checks; database failure is injected, not a real integration claim.
+..\.venv\Scripts\python.exe -m pytest -m 'not postgres' -q
+# Complete suite: automatically creates a randomly named disposable PostgreSQL
+# container on a dynamic localhost port, upgrades/downgrades, probes sessions,
+# stops its own database to verify outage handling, and cleans up in finally.
+..\.venv\Scripts\python.exe -m pytest -q
+```
 
-- Account registration, login and institution membership.
-- Student profiles and contributor verification.
-- Structured contributions covering journeys, projects, interviews and mistakes.
-- Private drafts and submission for review.
-- Moderator approval and requests for changes.
-- Keyword search with topic and academic-context filters.
-- Source details with dates, context and limitations.
-- AI answers supported by citations to reviewed experiences.
-- Clear insufficient-evidence responses.
-- Source versioning, correction and withdrawal.
-- Reports for unsupported answers, outdated guidance and abuse.
+Full tests require Docker and permission to pull the PostgreSQL image. They never use `DATABASE_URL` from your environment for integration tests. A Docker failure fails the suite rather than silently skipping PostgreSQL. `TEST_POSTGRES_IMAGE` may specify an approved PostgreSQL 16 image digest for reproducible CI. Python dependencies are fully resolved in `backend/requirements.lock` for Python 3.12; when intentionally updating dependencies, install `.[test]` in a clean virtual environment and regenerate the lock with `python -m pip freeze --exclude mentora-backend`. Do not substitute the bundled artifact Python runtime for normal teammate setup.
 
-### Pilot Increment
+The tested image digest and exact verification results are in [docs/s0.md](docs/s0.md). In this agent's Windows sandbox, pytest's usual temp/cache directories had permission conflicts. The verified alternative uses a fresh directory under the ignored virtual environment:
 
-- One reviewed learning roadmap.
-- Prerequisites and completion criteria for roadmap steps.
-- Evidence links supporting relevant recommendations.
-- Private progress tracking.
-- Mobile and accessibility improvements.
-- Quality, usability, reliability and cost evaluation.
+```powershell
+$testTemp = Join-Path (Resolve-Path '..\.venv') ('s0-tests-' + [guid]::NewGuid().ToString('N'))
+..\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=$testTemp
+```
 
-### Later Releases
+## Configuration and migrations
 
-- Mentor discovery and availability.
-- Mentorship requests and status tracking.
-- Anonymous peer questions with restricted moderator access to identity.
-- Question threads and human responses.
-- Different perspectives on the same topic.
-- Knowledge-gap reporting to identify missing contributions.
+| Variable | Requirement |
+| --- | --- |
+| `DATABASE_URL` | Required `postgresql+psycopg://user:password@host:port/database`; URL-encode special characters in credentials; only optional `sslmode` URL parameter is supported |
+| `DB_CONNECT_TIMEOUT_SECONDS` | Integer 1–30; proposed local default 3; also bounds pool checkout |
+| `DB_STATEMENT_TIMEOUT_MS` | Integer 1–30000; proposed local default 3000 |
 
-### Outside the Initial Scope
+Timeouts are foundation defaults pending measurements, not achieved performance guarantees. Connection and statement deadlines cover ordinary local readiness probes; DNS/network failures may have OS-dependent timing. `.env*`, private keys, caches and virtual environments are ignored. Never print settings, connection strings, raw exception traces, tokens or SQL parameters. SQL echo is disabled. Database and unexpected HTTP failures return safe messages without raw exception logging.
 
-- Live chat and video calls.
-- Payments.
-- Placement predictions or guarantees.
-- Automatic scraping.
-- Custom language-model training.
-- A broad multi-institution launch.
+One Alembic history is shared by Ankit and Naman. `0001_foundation` remains unchanged and empty. `0002_identity_profile` creates only `profiles` with a UUID primary key, optional display name, constrained active/blocked state and UTC-capable timestamp. No app startup schema creation occurs. From `backend/`, inspect `python -m alembic heads` before adding a revision; register only implemented models. Review autogenerated migrations. Run upgrades only on a known target; use disposable PostgreSQL first. Never rewrite migrations used by teammates. Downgrading `0002_identity_profile` deletes local profiles; it is tested only on disposable resources and must not be run on a shared database as a routine rollback.
 
-## How Mentora Will Work
+For teammates using Linux/macOS, use `python3.12 -m venv .venv`, `.venv/bin/python`, and after entering `backend`, `../.venv/bin/python` for the same commands. Dependencies and platform wheels must be verified on the chosen delivery platform before deployment.
 
-### Sharing an Experience
+## A1 checkpoint 1 identity configuration
 
-1. A verified contributor saves a structured draft.
-2. The contributor submits it for review.
-3. An institution moderator approves it or requests changes.
-4. Approved, consented content becomes discoverable.
-5. The contributor can later submit a correction or withdraw the source.
+Health probes still run with database-only configuration. `GET /api/v1/me` fails closed with 503 until both `SUPABASE_URL` (HTTPS project origin without path/credentials) and `SUPABASE_PUBLISHABLE_KEY` are configured. Partial/invalid configuration produces the same sanitized startup error convention as S0. A privileged Supabase secret/service key is not accepted here. Optional `SUPABASE_JWT_AUDIENCE` defaults to `authenticated`; `AUTH_HTTP_TIMEOUT_SECONDS` is 1–10, default 3 per HTTP phase. This is not a measured latency/overall deadline guarantee.
 
-### Asking a Question
+For a separately authorized isolated Supabase project, configure email/password sign-in with mandatory email confirmation, disable other pilot login methods, and use RS256/ES256 asymmetric signing keys. The backend uses the fixed project's JWKS and authenticated `/auth/v1/user` endpoint: it verifies token signature/issuer/audience/expiry/subject, then requires the current matching user to be non-anonymous with confirmed email. JWT/user-metadata roles do not grant application privileges. This checkpoint deliberately rejects legacy HS256; it requires a separately tested design if the selected project uses that mode. No real Supabase project was configured or contacted during verification.
 
-1. A student submits a question.
-2. The backend checks membership and usage allowance.
-3. A background worker retrieves relevant, permitted passages.
-4. The AI generates an answer using those passages.
-5. The student sees the answer and its supporting evidence.
-6. If the evidence is insufficient, Mentora says so.
+Login/signup/verification/recovery use Supabase's frontend Auth integration; this backend stores no password and exposes no duplicate login API. Do not paste access tokens or keys in chat, query strings or logs. The own-profile response contains only `userId` and `displayName`; first successful access creates a minimal profile with no membership or elevated rights. A locally blocked account is denied even with the same unexpired token. Membership administration and privilege-management APIs are not implemented; the explicitly invoked administrator bootstrap is documented below.
 
-### Following a Roadmap
+`PATCH /api/v1/me` accepts only `displayName`: a trimmed 2–80-character string or explicit null to clear it. Empty `{}`, blank/invalid strings, unknown and protected fields return 422 without any committed changes. It uses the same verified identity/current-profile checks as GET and returns the same safe fields. The HTTP operation owns the commit, including first-use initialization; invalid/failed updates roll back everything. See [docs/api.md](docs/api.md) for error codes, null/omission rules and the frontend handoff. No profile schema, dependency or signing-algorithm change is required.
 
-1. A student selects a supported learning goal.
-2. Mentora uses reviewed prerequisites and relevant evidence.
-3. The student follows the ordered steps and updates progress.
-4. Roadmap revisions preserve previously completed work.
+Application tables require a trusted server-side database role. The tested API connection owns the migrated profile table; a separate delivery role requires a reviewed server-access policy/privilege setup before integration. The profile migration enables RLS with no browser-access policies and revokes PUBLIC grants; a browser role cannot read or write profiles even if it has table grants. Do not add direct Supabase browser policies that bypass backend checks. Review deployment grants before real integration. The API process uses only server-side database credentials.
 
-## Planned Technology Stack
+The maintained tests use real locally signed ES256/RS256 JWTs, synthetic Supabase HTTP responses and disposable PostgreSQL. They verify endpoint denial, current blocked state, concurrent profile initialization, rollback, migration downgrade/upgrade and RLS denial. They are not proof of live Supabase email delivery, provider configuration or frontend login behaviour.
 
-| Area | Technology |
-|---|---|
-| Frontend | React, TypeScript and Vite |
-| Routing and styling | React Router and Tailwind CSS |
-| Data fetching | TanStack Query |
-| Forms and validation | React Hook Form and Zod |
-| Backend | Python and FastAPI |
-| API schemas | Pydantic |
-| Database access | SQLAlchemy 2 |
-| Database migrations | Alembic |
-| Database | PostgreSQL |
-| Search | PostgreSQL full-text search and pgvector |
-| Authentication | Supabase Auth |
-| AI integration | Official model SDK and an explicit RAG pipeline |
-| Background processing | Durable SQL jobs and a Python worker |
-| Backend tests | pytest and HTTPX |
-| Frontend tests | Vitest and React Testing Library |
-| Browser tests | Playwright |
-| Load tests | Locust |
-| Build and delivery | Docker and GitHub Actions |
 
-**Planned model baselines:** `text-embedding-3-small` for embeddings and `gpt-5-mini` for answer generation.
+## Checkpoint 3 pilot membership setup
 
-**Planned hosting baseline:** Cloudflare Pages for the frontend, Render for API and worker processes, and Supabase for managed supporting services.
+Migration head is `0003_membership_requests`, following unchanged `0002_identity_profile` and `0001_foundation`. From backend, run `..\.venv\Scripts\python.exe -m alembic upgrade head` only against your explicitly selected isolated local database. It creates institutions and current memberships; it seeds nothing. Downgrading to `0002_identity_profile` deletes all membership/institution data and preserves profiles; never use this as a shared-data reset.
 
-Model availability, provider limits and costs will be checked before configuration. Hosting plans will be selected within the team’s agreed budget.
-
-## Architecture
+An operator must select the actual pilot UUID, then provision that same UUID using a trusted database connection:
 
-Mentora will use a **modular backend with a separate background worker**.
+```sql
+-- Replace the placeholder only with the explicitly agreed pilot UUID.
+INSERT INTO institutions (id) VALUES ('<operator-selected-pilot-uuid>');
+```
 
-- The React application presents student and moderator screens.
-- FastAPI validates requests and checks current permissions.
-- PostgreSQL stores memberships, source versions, citations, roadmaps and jobs.
-- The worker processes indexing and AI-generation jobs.
-- External model services receive only the permitted information needed for the task.
+Set `PILOT_INSTITUTION_ID` to that UUID in private local configuration, then restart the app. No real pilot UUID was supplied or invented; tests use random synthetic UUIDs only. Missing configuration leaves health/profile endpoints available and membership requests fail closed with 503. A configured but absent record returns 404. No startup seeding, institution creation API or provider mutation exists. Shared provisioning/migrations require separate authorization.
 
-The API and worker will share backend code but run as separate processes.
+POST membership requests require an explicit empty JSON object `{}` and verified identity/current active account. Owner status is read by request ID; see docs/api.md for examples. Approval/rejection/revocation/reinstatement APIs, contributor/moderator/admin checks and bootstrap are not implemented here.
 
-Authentication identifies the user. Backend authorization decides what that user can access or change.
 
-## AI and RAG Approach
+## Checkpoint 4a explicit first-administrator bootstrap
 
-Mentora will use **Retrieval-Augmented Generation (RAG)**.
+Migration head is `0004_administration_prerequisite`, following unchanged revisions 0001-0003. Upgrade only your explicitly selected isolated local database using the existing Alembic command. This adds current platform administrators, institution moderators and a singleton bootstrap event. It seeds no privileges and startup never invokes bootstrap. Downgrading this revision destroys privileges AND the durable event; re-upgrading would reopen bootstrap. Never use downgrade, TRUNCATE or marker deletion as a shared/production reset or recovery procedure. Tests reset only their own randomly named disposable database.
 
-Before generating an answer, the system retrieves relevant passages from approved experiences. The answer must refer to the evidence used.
+Create/select an existing email-confirmed Supabase user in a separately authorized isolated project. Use the same configured SUPABASE_URL/publishable key/RS256-or-ES256 signing setup as normal identity verification. The operator must obtain that target user's short-lived Supabase access token through a trusted isolated sign-in flow; no application password or privileged service key is needed. Do not put the token in shell commands, environment variables, files, logs or chat.
 
-The initial approach will include:
+From backend in an interactive terminal, explicitly invoke:
 
-- Section-aware chunking.
-- Embedding generation.
-- Keyword and vector retrieval.
-- Hybrid ranking and deduplication.
-- Citation and claim-support checks.
-- Insufficient-evidence handling.
-- Source eligibility checks before saving and reading results.
+```powershell
+..\.venv\Scripts\python.exe -m app.modules.identity.bootstrap --user-id <existing-verified-supabase-user-uuid>
+```
 
-We do not plan to train a new language model.
+Replace the placeholder with the target UUID only. The command prompts for the target access token without echo and refuses terminals that require echoed fallback. It reuses signature/issuer/audience/expiry checks plus the trusted current `/auth/v1/user` lookup, requiring the exact UUID and confirmed non-anonymous email. A matching existing local profile alone is insufficient. It rejects blocked accounts. Database/provider configuration comes from the same private local configuration as the API; no credentials are accepted as command arguments.
 
-The evaluation will compare keyword, vector and hybrid retrieval using the same held-out questions and source corpus.
+Success returns `{"status":"bootstrapped"}` and exit 0. Denial/failure returns the safe error envelope on stderr and exit 1, with no raw token, provider or SQL detail. `--help` only displays usage. Global advisory transaction serialization checks both existing administrator grants and the durable singleton event, then commits any profile initialization, grant and event together. The event records target, time, `operator_command` origin and a fixed bootstrap reason; it does not claim to identify a human operator. Normal UPDATE/DELETE of the event is rejected. Removing a grant/profile never reopens bootstrap. Database owners can still deliberately destroy schema/data; this is not tamper-proof against a database owner.
 
-## Team and Responsibilities
+The administrator role is global administrative authority and does not create student membership or grant arbitrary institution-content access. Moderators require active membership in their assigned institution. No public signup/promotion or moderator appointment endpoint exists. This command was tested only on disposable PostgreSQL with synthetic Supabase HTTP; no shared/production command was invoked. Live provider integration and interactive terminal behaviour need separately authorized environment verification.
 
-| Member | Team | Main Responsibilities |
-|---|---|---|
-| **Ankit Singh** | Backend | Architecture, database schema, authentication, permissions, contribution lifecycle, core APIs and integration |
-| **Naman** | Backend | Moderation and roadmap APIs, background worker, integration testing, CI, deployment and recovery |
-| **Dhruv** | Frontend | Student portal, shared UI components, contribution forms, search and AI-answer screens |
-| **Parth** | Frontend | Moderator panel, reports and feedback screens, roadmap and progress UI |
-| **Shreya** | AI/ML | Chunking, embeddings, retrieval, ranking and cited-answer pipeline |
-| **Anshuman** | AI/ML | Evaluation dataset, quality checks, error analysis, prerequisites and roadmap recommendation logic |
 
-### Ownership Boundaries
+## Checkpoint 3b membership review slice
 
-- Dhruv builds shared components; Parth reuses them.
-- Parth builds moderation and roadmap screens; Naman builds their backend APIs.
-- Ankit owns shared authentication, permission and publication services.
-- Shreya builds AI handlers; Naman executes them through the worker.
-- Anshuman builds roadmap logic; Naman persists results and Parth displays them.
-- Every member tests their own features. Naman coordinates overall integration testing.
+Migration head is `0006_membership_transitions`, after unchanged revisions 0001-0005. Use the same documented `alembic upgrade head` only against your explicitly selected isolated local database. No new configuration/dependency or seed. This revision adds immutable request-key-unique review audit; downgrading to 0004 destroys review history but preserves memberships, profiles, privileges and bootstrap event. It is not a shared-data reset or production operation.
 
-## Proposed Repository Structure
+Institution-scoped GET list/detail and POST decision use current platform-administrator or assigned active-moderator permission. Approval grants student membership only; no automatic moderator/contributor/admin role. The existing owner status/re-request APIs keep their response shapes and rules. Frontend examples, bounded pagination, reason/null rules and conflicts are in docs/api.md. Revocation/reinstatement uses current scoped authority, strict reason and expectedVersion, atomic grant invalidation and immutable transition audit. No bootstrap was needed or invoked to seed reviewer fixtures.
 
-The following structure will be created during project setup:
 
-| Directory | Purpose |
-|---|---|
-| `frontend/` | React application and frontend tests |
-| `backend/` | FastAPI modules, worker, migrations and backend tests |
-| `evaluation/` | Reviewed datasets, evaluation runners and results |
-| `tests/e2e/` | Integrated browser tests |
-| `deployment/` | Deployment configuration |
-| `docs/` | PRD, architecture, contracts and operating guides |
+Checkpoint 3b revocation/reinstatement adds revision 0006: a nonnegative membership transition version and immutable transition ledger. Run the documented migration command only on your explicitly chosen isolated local database. Downgrade to 0005 removes transition audit/version data and resets the version fence if upgraded again; it preserves current membership status, previous review records, profiles and remaining privilege/bootstrap records. It is not an operational rollback for shared data.
 
-AI modules will live inside the shared backend where needed. Evaluation experiments will remain in `evaluation/`.
-
-## Development Roadmap
-
-Week numbers start from the agreed project kickoff.
-
-| Phase | Period | Main Deliverable |
-|---|---|---|
-| Planning and setup | Week 1 | Scope, contracts, schema, wireframes and local setup |
-| Core MVP | Weeks 2–3 | Accounts, contributions, moderation and keyword discovery |
-| Evidence and AI | Weeks 4–5 | Worker, embeddings, hybrid retrieval, citations and withdrawal |
-| Roadmaps and hardening | Weeks 6–7 | One roadmap, private progress, feedback and release checks |
-| Supervised pilot | Weeks 8–11 | Usability, quality, reliability and cost observations |
-| Evaluation and handover | Week 12 | Final report, demonstration and maintenance documentation |
-
-The first integration milestone is:
-
-**Senior submits → moderator approves → junior discovers the experience.**
-
-## Privacy and Reliability Requirements
-
-- Drafts remain private to their owners and permitted reviewers.
-- Institution access is checked on the backend.
-- Published source versions are preserved for provenance.
-- Withdrawal immediately removes a source from new retrieval.
-- Existing answers recheck access to their supporting sources.
-- Roadmap progress and answer history remain owner-private.
-- API keys, tokens and verification documents stay out of public code and logs.
-- Anonymous identity mappings stay out of peer responses and AI context.
-- AI source text is treated as untrusted data.
-- Background jobs survive restarts and use bounded retries.
-- Provider failures and exhausted allowances produce clear user states.
-
-Reviewed experience is contextual guidance. It does not guarantee factual correctness or placement outcomes.
-
-## Testing and Evaluation
-
-The planned checks include:
-
-- Unit tests for state transitions, validation and recommendation rules.
-- Integration tests for permissions, publication, retries and withdrawal.
-- Browser tests for the complete student and moderator journeys.
-- Security tests for cross-institution access and privilege escalation.
-- Worker restart and provider-outage tests.
-- Accessibility and mobile checks.
-- Load tests and backup-restoration exercises.
-
-AI evaluation will measure:
-
-- Retrieval Recall@k.
-- Mean Reciprocal Rank.
-- Citation and claim support.
-- Answer coverage.
-- Correct abstention.
-- Latency and token cost.
-
-All reported results will include their dataset, configuration and sample size. Targets will not be presented as achieved results.
-
-## Documentation
-
-The project documentation has been prepared and will be added to the repository:
-
-- Product Requirements Document.
-- System Design and Architecture.
-- Final Team Work Allocation.
-- Individual Work Assignment Guides.
-- API contracts.
-- Testing and evaluation reports.
-- Deployment and recovery runbooks.
-
-Repository links will be added once these files are uploaded.
-
-## Local Setup
-
-The application scaffold has not been created yet.
-
-Installation, environment configuration and startup commands will be documented after the initial setup is working. Avoid treating placeholder commands as a runnable setup guide.
-
-## Contribution Workflow
-
-1. Clone the repository.
-2. Create a feature branch for your task.
-3. Work within your assigned module.
-4. Coordinate shared schema, API or UI changes with the owner.
-5. Run the checks relevant to your changes.
-6. Open a pull request with:
-   - What changed.
-   - How it was verified.
-   - Any remaining limitations.
-7. Merge after review and required checks.
-
-Suggested branch names:
-
-- `feature/student-dashboard`
-- `feature/moderation-panel`
-- `feature/experience-api`
-- `feature/background-worker`
-- `feature/hybrid-retrieval`
-- `feature/roadmap-logic`
-
-Never commit credentials, private student data or real verification documents.
-
-## License
-
-A license has not been selected yet. The team will decide the usage and distribution terms before a public release.
+For reproducible Windows tests when the system pytest temporary directory or OneDrive cache is inaccessible, run from backend:
+../.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --basetemp=.test-tmp-transition-check
+Use a new ignored .test-tmp-* directory for a subsequent run; pytest may clear its selected basetemp. These tests provision uniquely named disposable PostgreSQL containers and remove them in teardown. Never point them at a shared database.
